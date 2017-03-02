@@ -45,7 +45,7 @@ Then, let's setup the LSST Stack:
 
 and install the ``Executor``:
 
-.. code_block::
+.. code-block::
 
    $ export PYTHONPATH="$PYTHONPATH:$DIR/Executor"
    $ export PATH="$PATH:$DIR/Executor/bin"
