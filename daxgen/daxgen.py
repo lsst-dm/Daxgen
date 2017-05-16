@@ -1,5 +1,5 @@
 import networkx as nx
-from Pegasus.DAX3 import ADAG, File, Job, Link
+from Pegasus.DAX3 import ADAG, File, Job, Link, PFN
 
 
 # Set of mandatory attributes unique to file nodes. Do not have to be
@@ -97,7 +97,16 @@ class Daxgen(object):
         for v in tasks:
             attrs = self.graph.node[v]
             job = Job(name=attrs['name'], id=v)
-            job.addArguments(attrs['args'].split())
+
+            # Add job command line arguments replacing any file name with
+            # respective Pegasus file object.
+            args = attrs['args'].split()
+            lfns = list(set(catalog) & set(args))
+            if lfns:
+                indices = [args.index(lfn) for lfn in lfns]
+                for idx, lfn in zip(indices, lfns):
+                    args[idx] = catalog[lfn]
+            job.addArguments(*args)
 
             # Specify job's inputs.
             vertices = [u for u in self.graph.predecessors(v)]
@@ -123,8 +132,9 @@ class Daxgen(object):
 
         # Add job dependencies to the DAX.
         for v in tasks:
-            inputs = set([u for u in self.graph.predeccessors(v)])
-            parents = set([self.graph.predeccessors(u) for u in inputs])
+            parents = set()
+            for u in self.graph.predecessors(v):
+                parents.update(self.graph.predecessors(u))
             for u in parents:
                 dax.depends(parent=dax.getJob(u), child=dax.getJob(v))
 
