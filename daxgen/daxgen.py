@@ -2,8 +2,9 @@ import networkx as nx
 from Pegasus.DAX3 import ADAG, File, Job, Link
 
 
-# Set of attributes unique to file nodes. Do not have to be complete,
-_FILE_ATTRS = {'lfn', 'pfns'}
+# Set of mandatory attributes unique to file nodes. Do not have to be
+# exhaustive.
+_FILE_ATTRS = {'lfn'}
 
 
 class Daxgen(object):
@@ -77,12 +78,19 @@ class Daxgen(object):
         # Add files to DAX-level replica catalog.
         catalog = {}
         for v in files:
-            lfn, pfns = self.graph.node[v]['lfn'], self.graph.node[v]['pfns']
-            f = File(lfn)
-            for pfn, site in pfns:
-                f.addPFN(pfn, site)
-            catalog[lfn] = f
-        for f in catalog.values():
+            attrs = self.graph.node[v]
+            f = File(attrs['lfn'])
+
+            # Add physical file names, if any.
+            urls = attrs.get('urls')
+            if urls is not None:
+                sites = attrs.get('sites')
+                if sites is None:
+                    sites = ','.join(len(urls) * ['local'])
+                for url, site in zip(urls.split(','), sites.split(',')):
+                    f.addPFN(PFN(url, site))
+
+            catalog[attrs['lfn']] = f
             dax.addFile(f)
 
         # Add jobs to the DAX.
@@ -105,17 +113,12 @@ class Daxgen(object):
                 f = catalog[attrs['lfn']]
                 job.uses(f, link=Link.OUTPUT)
 
-                stream = attrs.get('stream')
-                if stream is not None:
-                    stream = stream.lower()
-                    if stream == 'stderr':
-                        job.setStderr(f)
-                    elif stream == 'stdout':
+                streams = attrs.get('streams')
+                if streams is not None:
+                    if streams & 1 != 0:
                         job.setStdout(f)
-                    else:
-                        # For now, ignore errors in stream specification. Log
-                        # in the future.
-                        pass
+                    if streams & 2 != 0:
+                        job.setStderr(f)
             dax.addJob(job)
 
         # Add job dependencies to the DAX.
