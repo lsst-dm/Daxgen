@@ -75,8 +75,8 @@ def parse_dax(plan):
                       if entry['@link'] == 'input']
             outputs = [entry['@name'] for entry in resources
                        if entry['@link'] == 'output']
-            dag.add_edges_from([(v, mapping[lfn]) for lfn in inputs])
-            dag.add_edges_from([(mapping[lfn], v) for lfn in outputs])
+            dag.add_edges_from([(mapping[lfn], v) for lfn in inputs])
+            dag.add_edges_from([(v, mapping[lfn]) for lfn in outputs])
 
         # Flag files to which standard streams are redirected.
         streams = {'stderr': 2, 'stdout': 1}
