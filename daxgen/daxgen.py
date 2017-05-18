@@ -18,7 +18,7 @@ class Daxgen(object):
 
     def __init__(self, graph=None):
         self.graph = graph if graph is not None else nx.DiGraph()
-        self._check_sanity()
+        self._color()
 
     def read(self, filename):
         """Read a persisted workflow.
@@ -50,7 +50,7 @@ class Daxgen(object):
             self.graph = methods[ext.lower()](filename)
         except KeyError:
             raise ValueError('Format \'%s\' is not supported yet.' % ext)
-        self._check_sanity()
+        self._color()
 
     def write(self, filename, name='dax'):
         """Generate Pegasus abstract workflow (DAX).
@@ -145,26 +145,9 @@ class Daxgen(object):
     def _color(self):
         """Differentiate files from tasks.
 
-        To easily keep track of which set a node belongs to the function adds
-        an additional attribute `bipartite` to each node in the graph. By
+        The function adds an additional attribute `bipartite` to each node in
+        the graph to easily keep track of which set a node belongs to.  By
         convention, 1 will be used to denote files, and 0 to denote tasks.
-        """
-        U, V = nx.bipartite.sets(self.graph)
-
-        # Select an arbitrary vertex from the set U and based on its attributes
-        # decide if the set U represents files and respectively, V represents
-        # tasks, or the other way round.
-        v = next(iter(U))
-        node_attrs = set(self.graph.node[v].keys())
-        files, tasks = (U, V) if node_attrs >= _FILE_ATTRS else (V, U)
-
-        # Add the new attribute which allow to quickly differentiate
-        # vertices representing files from those representing tasks.
-        for v in self.graph:
-            self.graph.node[v]['bipartite'] = 1 if v in files else 0
-
-    def _check_sanity(self):
-        """Check if graph is bipartite.
 
         Raises
         ------
@@ -176,6 +159,20 @@ class Daxgen(object):
                 nx.bipartite.color(self.graph)
             except nx.NetworkXError:
                 raise ValueError("Graph is not bipartite.")
+
+            U, V = nx.bipartite.sets(self.graph)
+
+            # Select an arbitrary vertex from the set U and based on its
+            # attributes decide if the set U represents files and respectively,
+            # V represents tasks, or the other way round.
+            v = next(iter(U))
+            node_attrs = set(self.graph.node[v].keys())
+            files, tasks = (U, V) if node_attrs >= _FILE_ATTRS else (V, U)
+
+            # Add the new attribute which allow to quickly differentiate
+            # vertices representing files from those representing tasks.
+            for v in self.graph:
+                self.graph.node[v]['bipartite'] = 1 if v in files else 0
 
 
 def read_json(filename):
