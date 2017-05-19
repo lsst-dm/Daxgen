@@ -17,7 +17,7 @@ class Daxgen(object):
     """
 
     def __init__(self, graph=None):
-        self.graph = graph if graph is not None else nx.DiGraph()
+        self.graph = graph.copy() if graph is not None else nx.DiGraph()
         self._color()
 
     def read(self, filename):
