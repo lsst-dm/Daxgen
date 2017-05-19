@@ -69,7 +69,6 @@ class Daxgen(object):
         `Pegasus.ADAG`
             Abstract workflow used by Pegasus' planner.
         """
-        self._color()
         files = set([v for v in self.graph
                      if self.graph.node[v]['bipartite'] == 1])
         tasks = set([v for v in self.graph
