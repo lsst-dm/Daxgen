@@ -43,6 +43,8 @@ class Daxgen(object):
         methods = {
             'json': read_json,
             'gexf': nx.read_gexf,
+            'gxf': nx.read_gexf,
+            'gml': nx.read_graphml,
             'graphml': nx.read_graphml
         }
         ext = filename.split('.')[-1]
