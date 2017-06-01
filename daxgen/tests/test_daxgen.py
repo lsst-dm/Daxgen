@@ -78,20 +78,16 @@ http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd">
         self.assertEqual(len(nodes), 3)
         self.assertEqual(len(edges), 2)
 
-    def test_color_invalid(self):
+    def test_label_invalid(self):
         g = self.valid.graph.copy()
         g.add_edge("0", "2")
         with self.assertRaises(ValueError):
             Daxgen(g)
 
-    def test_color_valid(self):
+    def test_label_valid(self):
         g = self.valid.graph
         attrs = tuple(g.node[u]['bipartite'] for u in ['0', '1', '2'])
         self.assertEqual(attrs, (1, 0, 1))
-
-    def test_read_unknown(self):
-        with self.assertRaises(ValueError):
-            self.empty.read('workflow.xml')
 
     @unittest.skip('requires development version of NetworkX (>1.11)')
     def test_read_json(self):
@@ -113,6 +109,10 @@ http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd">
         self.assertDictContainsSubset(h.graph, g.graph)
         for u, v in zip(sorted(g.nodes()), sorted(h.nodes())):
             self.assertEqual(g.node[u], h.node[v])
+
+    def test_read_unsupported(self):
+        with self.assertRaises(ValueError):
+            self.empty.read('workflow.xml')
 
     def test_write(self):
         pass

@@ -2,11 +2,6 @@ import networkx as nx
 from Pegasus.DAX3 import ADAG, File, Job, Link, PFN
 
 
-# Set of mandatory attributes unique to file nodes. Do not have to be
-# exhaustive.
-_FILE_ATTRS = {'lfn'}
-
-
 class Daxgen(object):
     """Generator of Pegasus DAXes.
 
@@ -18,7 +13,7 @@ class Daxgen(object):
 
     def __init__(self, graph=None):
         self.graph = graph.copy() if graph is not None else nx.DiGraph()
-        self._color()
+        self._label()
 
     def read(self, filename):
         """Read a persisted workflow.
@@ -51,8 +46,8 @@ class Daxgen(object):
         try:
             self.graph = methods[ext.lower()](filename)
         except KeyError:
-            raise ValueError('Format \'%s\' is not supported yet.' % ext)
-        self._color()
+            raise ValueError("Format '{0}' is not supported yet.".format(ext))
+        self._label()
 
     def write(self, filename, name='dax'):
         """Generate Pegasus abstract workflow (DAX).
@@ -69,17 +64,17 @@ class Daxgen(object):
         `Pegasus.ADAG`
             Abstract workflow used by Pegasus' planner.
         """
-        files = set([v for v in self.graph
-                     if self.graph.node[v]['bipartite'] == 1])
-        tasks = set([v for v in self.graph
-                     if self.graph.node[v]['bipartite'] == 0])
+        files = set([node_id for node_id in self.graph
+                     if self.graph.node[node_id]['bipartite'] == 1])
+        tasks = set([node_id for node_id in self.graph
+                     if self.graph.node[node_id]['bipartite'] == 0])
 
         dax = ADAG(name)
 
         # Add files to DAX-level replica catalog.
         catalog = {}
-        for v in files:
-            attrs = self.graph.node[v]
+        for file_id in files:
+            attrs = self.graph.node[file_id]
             f = File(attrs['lfn'])
 
             # Add physical file names, if any.
@@ -95,31 +90,33 @@ class Daxgen(object):
             dax.addFile(f)
 
         # Add jobs to the DAX.
-        for v in tasks:
-            attrs = self.graph.node[v]
-            job = Job(name=attrs['name'], id=v)
+        for task_id in tasks:
+            attrs = self.graph.node[task_id]
+            job = Job(name=attrs['name'], id=task_id)
 
             # Add job command line arguments replacing any file name with
             # respective Pegasus file object.
-            args = attrs['args'].split()
-            lfns = list(set(catalog) & set(args))
-            if lfns:
-                indices = [args.index(lfn) for lfn in lfns]
-                for idx, lfn in zip(indices, lfns):
-                    args[idx] = catalog[lfn]
-            job.addArguments(*args)
+            args = attrs.get('args')
+            if args is not None and args:
+                args = args.split()
+                lfns = list(set(catalog) & set(args))
+                if lfns:
+                    indices = [args.index(lfn) for lfn in lfns]
+                    for idx, lfn in zip(indices, lfns):
+                        args[idx] = catalog[lfn]
+                job.addArguments(*args)
 
             # Specify job's inputs.
-            vertices = [u for u in self.graph.predecessors(v)]
-            for u in vertices:
-                attrs = self.graph.node[u]
+            inputs = [file_id for file_id in self.graph.predecessors(task_id)]
+            for file_id in inputs:
+                attrs = self.graph.node[file_id]
                 f = catalog[attrs['lfn']]
                 job.uses(f, link=Link.INPUT)
 
             # Specify job's outputs
-            vertices = [u for u in self.graph.successors(v)]
-            for u in vertices:
-                attrs = self.graph.node[u]
+            outputs = [file_id for file_id in self.graph.successors(task_id)]
+            for file_id in outputs:
+                attrs = self.graph.node[file_id]
                 f = catalog[attrs['lfn']]
                 job.uses(f, link=Link.OUTPUT)
 
@@ -129,21 +126,23 @@ class Daxgen(object):
                         job.setStdout(f)
                     if streams & 2 != 0:
                         job.setStderr(f)
+
             dax.addJob(job)
 
         # Add job dependencies to the DAX.
-        for v in tasks:
+        for task_id in tasks:
             parents = set()
-            for u in self.graph.predecessors(v):
-                parents.update(self.graph.predecessors(u))
-            for u in parents:
-                dax.depends(parent=dax.getJob(u), child=dax.getJob(v))
+            for file_id in self.graph.predecessors(task_id):
+                parents.update(self.graph.predecessors(file_id))
+            for parent_id in parents:
+                dax.depends(parent=dax.getJob(parent_id),
+                            child=dax.getJob(task_id))
 
         # Finally, write down the workflow in DAX format.
         with open(filename, 'w') as f:
             dax.writeXML(f)
 
-    def _color(self):
+    def _label(self):
         """Differentiate files from tasks.
 
         The function adds an additional attribute `bipartite` to each node in
@@ -155,6 +154,11 @@ class Daxgen(object):
         `ValueError`
             If the graph is not bipartite.
         """
+        # Set of mandatory attributes unique to file nodes. Currently, these
+        # are:
+        # - lfn: logical file name.
+        file_attrs = {'lfn'}
+
         if self.graph:
             try:
                 nx.bipartite.color(self.graph)
@@ -168,7 +172,7 @@ class Daxgen(object):
             # V represents tasks, or the other way round.
             v = next(iter(U))
             node_attrs = set(self.graph.node[v].keys())
-            files, tasks = (U, V) if node_attrs >= _FILE_ATTRS else (V, U)
+            files, tasks = (U, V) if file_attrs.issubset(node_attrs) else (V, U)
 
             # Add the new attribute which allow to quickly differentiate
             # vertices representing files from those representing tasks.
