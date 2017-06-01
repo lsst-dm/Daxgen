@@ -41,7 +41,7 @@ class Pathogen:
             If file does not exist, physical name defaults to None.
         """
         mapping = getattr(self.mapper, 'map_' + data_type)
-        path = os.path.abspath(mapping(data_id).getLocations()[0])
+        path = mapping(data_id).getLocationsWithRoot()[0]
         pfn = path if os.path.isfile(path) else None
         lfn = path.replace(self.root, self.output)
         return lfn, pfn
