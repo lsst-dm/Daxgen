@@ -1,5 +1,8 @@
+import inspect
 import networkx as nx
+import os
 from Pegasus.DAX3 import ADAG, File, Job, Link, PFN
+from .cowriter import Cowriter
 
 
 class Daxgen(object):
@@ -13,7 +16,16 @@ class Daxgen(object):
 
     def __init__(self, graph=None):
         self.graph = graph.copy() if graph is not None else nx.DiGraph()
-        self._label()
+        if self.graph:
+            self._label()
+            self.files = set([node_id for node_id in self.graph
+                              if self.graph.node[node_id]['bipartite'] == 1])
+            self.tasks = set([node_id for node_id in self.graph
+                              if self.graph.node[node_id]['bipartite'] == 0])
+
+        dirname = os.path.dirname(inspect.getfile(Cowriter))
+        location = os.path.join(dirname, 'templates')
+        self.writer = Cowriter('executor', path=location)
 
     def read(self, filename):
         """Read a persisted workflow.
@@ -47,7 +59,12 @@ class Daxgen(object):
             self.graph = methods[ext.lower()](filename)
         except KeyError:
             raise ValueError("Format '{0}' is not supported yet.".format(ext))
-        self._label()
+        if self.graph:
+            self._label()
+            self.files = set([v for v in self.graph
+                              if self.graph.node[v]['bipartite'] == 1])
+            self.tasks = set([v for v in self.graph
+                              if self.graph.node[v]['bipartite'] == 0])
 
     def write(self, filename, name='dax'):
         """Generate Pegasus abstract workflow (DAX).
@@ -64,16 +81,11 @@ class Daxgen(object):
         `Pegasus.ADAG`
             Abstract workflow used by Pegasus' planner.
         """
-        files = set([node_id for node_id in self.graph
-                     if self.graph.node[node_id]['bipartite'] == 1])
-        tasks = set([node_id for node_id in self.graph
-                     if self.graph.node[node_id]['bipartite'] == 0])
-
         dax = ADAG(name)
 
         # Add files to DAX-level replica catalog.
         catalog = {}
-        for file_id in files:
+        for file_id in self.files:
             attrs = self.graph.node[file_id]
             f = File(attrs['lfn'])
 
@@ -90,7 +102,7 @@ class Daxgen(object):
             dax.addFile(f)
 
         # Add jobs to the DAX.
-        for task_id in tasks:
+        for task_id in self.tasks:
             attrs = self.graph.node[task_id]
             job = Job(name=attrs['name'], id=task_id)
 
@@ -130,7 +142,7 @@ class Daxgen(object):
             dax.addJob(job)
 
         # Add job dependencies to the DAX.
-        for task_id in tasks:
+        for task_id in self.tasks:
             parents = set()
             for file_id in self.graph.predecessors(task_id):
                 parents.update(self.graph.predecessors(file_id))
@@ -141,6 +153,41 @@ class Daxgen(object):
         # Finally, write down the workflow in DAX format.
         with open(filename, 'w') as f:
             dax.writeXML(f)
+
+    def wrap(self, wrapper='execute', args=None):
+        """Use a wrapper (i.e. Executor) to execute tasks.
+        """
+
+        # At the moment nodes ids are strings representing consecutive
+        # integers.  As we will be adding new nodes soon, we have to find out
+        # what is the last value that was used.
+        #
+        # FIXME: This clearly indicates that a different approach for generating
+        # node ids would be beneficial, prehaps based on node attritubtes.
+        idx = max(int(s) for s in self.graph)
+
+        src = self._find_root()
+        dest = src
+
+        for v in self.tasks:
+            attrs = self.graph.node[v]
+            name, args = attrs['name'], attrs['args']
+
+            # Generate node id.
+            idx += 1
+            u = str(idx)
+
+            config = self.writer.write(name, args, src, dest)
+            file_attrs = {
+                'lfn': config,
+                'urls': os.path.abspath(config),
+                'sites': 'local'
+            }
+            self.graph.add_node(u, **file_attrs)
+            self.graph.add_edge(u, v)
+            self.files.add(u)
+
+            attrs['name'], attrs['args'] = wrapper, config
 
     def _label(self):
         """Differentiate files from tasks.
@@ -159,25 +206,33 @@ class Daxgen(object):
         # - lfn: logical file name.
         file_attrs = {'lfn'}
 
-        if self.graph:
-            try:
-                nx.bipartite.color(self.graph)
-            except nx.NetworkXError:
-                raise ValueError("Graph is not bipartite.")
+        try:
+            nx.bipartite.color(self.graph)
+        except nx.NetworkXError:
+            raise ValueError("Graph is not bipartite.")
 
-            U, V = nx.bipartite.sets(self.graph)
+        U, V = nx.bipartite.sets(self.graph)
 
-            # Select an arbitrary vertex from the set U and based on its
-            # attributes decide if the set U represents files and respectively,
-            # V represents tasks, or the other way round.
-            v = next(iter(U))
-            node_attrs = set(self.graph.node[v].keys())
-            files, tasks = (U, V) if file_attrs.issubset(node_attrs) else (V, U)
+        # Select an arbitrary vertex from the set U and based on its
+        # attributes decide if the set U represents files and respectively,
+        # V represents tasks, or the other way round.
+        v = next(iter(U))
+        node_attrs = set(self.graph.node[v].keys())
+        files, tasks = (U, V) if file_attrs.issubset(node_attrs) else (V, U)
 
-            # Add the new attribute which allow to quickly differentiate
-            # vertices representing files from those representing tasks.
-            for v in self.graph:
-                self.graph.node[v]['bipartite'] = 1 if v in files else 0
+        # Add the new attribute which allow to quickly differentiate
+        # vertices representing files from those representing tasks.
+        for v in self.graph:
+            self.graph.node[v]['bipartite'] = 1 if v in files else 0
+
+    def _find_root(self):
+        """Find root of the dataset repository.
+        """
+        lfns = [self.graph.node[file_id]['lfn'] for file_id in self.files]
+        for lfn in lfns:
+            if '_mapper' in lfn:
+                break
+        return os.path.dirname(lfn)
 
 
 def read_json(filename):
