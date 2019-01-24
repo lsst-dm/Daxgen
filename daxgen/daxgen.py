@@ -1,8 +1,6 @@
-import inspect
+import pickle
 import networkx as nx
-import os
 from Pegasus.DAX3 import ADAG, File, Job, Link, PFN
-from .cowriter import Cowriter
 
 
 class Daxgen(object):
@@ -19,13 +17,10 @@ class Daxgen(object):
         if self.graph:
             self._label()
             self.files = set([node_id for node_id in self.graph
-                              if self.graph.node[node_id]['bipartite'] == 1])
+                              if self.graph.node[node_id]['node_type'] == 0])
             self.tasks = set([node_id for node_id in self.graph
-                              if self.graph.node[node_id]['bipartite'] == 0])
-
-        dirname = os.path.dirname(inspect.getfile(Cowriter))
-        location = os.path.join(dirname, 'templates')
-        self.writer = Cowriter('executor', path=location)
+                              if self.graph.node[node_id]['node_type'] == 1])
+        self.catalog = {}
 
     def read(self, filename):
         """Read a persisted workflow.
@@ -34,7 +29,8 @@ class Daxgen(object):
 
         - GraphML,
         - JSON node-link,
-        - GEXF.
+        - GEXF,
+        - Python pickle.
 
         Parameters
         ----------
@@ -52,7 +48,8 @@ class Daxgen(object):
             'gexf': nx.read_gexf,
             'gxf': nx.read_gexf,
             'gml': nx.read_graphml,
-            'graphml': nx.read_graphml
+            'graphml': nx.read_graphml,
+            'pickle': read_pickle
         }
         ext = filename.split('.')[-1]
         try:
@@ -62,11 +59,11 @@ class Daxgen(object):
         if self.graph:
             self._label()
             self.files = set([v for v in self.graph
-                              if self.graph.node[v]['bipartite'] == 1])
+                              if self.graph.node[v]['node_type'] == 0])
             self.tasks = set([v for v in self.graph
-                              if self.graph.node[v]['bipartite'] == 0])
+                              if self.graph.node[v]['node_type'] == 1])
 
-    def write(self, filename, name='dax'):
+    def write_dax(self, filename='workflow.dax', name='workflow'):
         """Generate Pegasus abstract workflow (DAX).
 
         Parameters
@@ -80,64 +77,95 @@ class Daxgen(object):
         -------
         `Pegasus.ADAG`
             Abstract workflow used by Pegasus' planner.
+
+        Raises
+        ------
+        `ValueError`
+            If either task or file node is missing mandatory attribute.
         """
         dax = ADAG(name)
 
-        # Add files to DAX-level replica catalog.
-        catalog = {}
+        # Process file nodes.
         for file_id in self.files:
             attrs = self.graph.node[file_id]
-            f = File(attrs['lfn'])
+            try:
+                name = attrs['lfn']
+            except KeyError:
+                msg = 'Mandatory attribute "%s" is missing.'
+                raise AttributeError(msg.format('lfn'))
+            file_ = File(name)
 
             # Add physical file names, if any.
-            urls = attrs.get('urls')
+            urls = attrs.get('pfn')
             if urls is not None:
+                urls = urls.split(',')
                 sites = attrs.get('sites')
                 if sites is None:
-                    sites = ','.join(len(urls) * ['local'])
-                for url, site in zip(urls.split(','), sites.split(',')):
-                    f.addPFN(PFN(url, site))
+                    sites = len(urls) * ['condorpool']
+                for url, site in zip(urls, sites):
+                    file_.addPFN(PFN(url, site))
 
-            catalog[attrs['lfn']] = f
-            dax.addFile(f)
+            self.catalog[attrs['lfn']] = file_
 
         # Add jobs to the DAX.
+        counter = {}
         for task_id in self.tasks:
             attrs = self.graph.node[task_id]
-            job = Job(name=attrs['name'], id=task_id)
+            try:
+                name = attrs['exec_name']
+            except KeyError:
+                msg = 'Mandatory attribute "%s" is missing.'
+                raise AttributeError(msg.format('exec_name'))
+            counter.setdefault(name, 0)
+            counter[name] += 1
+            label = '{name}_{count}'.format(name=name, count=counter[name])
+            job = Job(name, id=label)
 
             # Add job command line arguments replacing any file name with
             # respective Pegasus file object.
-            args = attrs.get('args')
-            if args is not None and args:
+            args = attrs.get('exec_args', [])
+            if args:
                 args = args.split()
-                lfns = list(set(catalog) & set(args))
+                lfns = list(set(self.catalog) & set(args))
                 if lfns:
                     indices = [args.index(lfn) for lfn in lfns]
                     for idx, lfn in zip(indices, lfns):
-                        args[idx] = catalog[lfn]
+                        args[idx] = self.catalog[lfn]
                 job.addArguments(*args)
 
             # Specify job's inputs.
             inputs = [file_id for file_id in self.graph.predecessors(task_id)]
             for file_id in inputs:
                 attrs = self.graph.node[file_id]
-                f = catalog[attrs['lfn']]
-                job.uses(f, link=Link.INPUT)
+                is_ignored = attrs.get('ignore', False)
+                if not is_ignored:
+                    file_ = self.catalog[attrs['lfn']]
+                    job.uses(file_, link=Link.INPUT)
 
             # Specify job's outputs
             outputs = [file_id for file_id in self.graph.successors(task_id)]
             for file_id in outputs:
                 attrs = self.graph.node[file_id]
-                f = catalog[attrs['lfn']]
-                job.uses(f, link=Link.OUTPUT)
+                is_ignored = attrs.get('ignore', False)
+                if not is_ignored:
+                    file_ = self.catalog[attrs['lfn']]
+                    job.uses(file_, link=Link.OUTPUT)
 
-                streams = attrs.get('streams')
-                if streams is not None:
-                    if streams & 1 != 0:
-                        job.setStdout(f)
-                    if streams & 2 != 0:
-                        job.setStderr(f)
+                    streams = attrs.get('streams')
+                    if streams is not None:
+                        if streams & 1 != 0:
+                            job.setStdout(file_)
+                        if streams & 2 != 0:
+                            job.setStderr(file_)
+
+            # Provide default files to store stderr and stdout, if not
+            # specified explicitly.
+            if job.stderr is None:
+                file_ = File('{name}.out'.format(name=label))
+                job.setStderr(file_)
+            if job.stdout is None:
+                file_ = File('{name}.err'.format(name=label))
+                job.setStdout(file_)
 
             dax.addJob(job)
 
@@ -154,40 +182,20 @@ class Daxgen(object):
         with open(filename, 'w') as f:
             dax.writeXML(f)
 
-    def wrap(self, wrapper='execute', args=None):
-        """Use a wrapper (i.e. Executor) to execute tasks.
+    def write_rc(self, name='rc.txt'):
+        """Write replica catalog.
+
+        Parameters
+        ----------
+        name : string, optional
+            Name of the replica file.
         """
-
-        # At the moment nodes ids are strings representing consecutive
-        # integers.  As we will be adding new nodes soon, we have to find out
-        # what is the last value that was used.
-        #
-        # FIXME: This clearly indicates that a different approach for generating
-        # node ids would be beneficial, prehaps based on node attritubtes.
-        idx = max(int(s) for s in self.graph)
-
-        src = self._find_root()
-        dest = src
-
-        for v in self.tasks:
-            attrs = self.graph.node[v]
-            name, args = attrs['name'], attrs['args']
-
-            # Generate node id.
-            idx += 1
-            u = str(idx)
-
-            config = self.writer.write(name, args, src, dest)
-            file_attrs = {
-                'lfn': config,
-                'urls': os.path.abspath(config),
-                'sites': 'local'
-            }
-            self.graph.add_node(u, **file_attrs)
-            self.graph.add_edge(u, v)
-            self.files.add(u)
-
-            attrs['name'], attrs['args'] = wrapper, config
+        files = [file_ for file_ in self.catalog.values() if file_.pfns]
+        with open(name, 'w') as f:
+            for file_ in files:
+                lfn = file_.name
+                for pfn in file_.pfns:
+                    f.write(' '.join([lfn, pfn.url, pfn.site]) + '\n')
 
     def _label(self):
         """Differentiate files from tasks.
@@ -223,16 +231,7 @@ class Daxgen(object):
         # Add the new attribute which allow to quickly differentiate
         # vertices representing files from those representing tasks.
         for v in self.graph:
-            self.graph.node[v]['bipartite'] = 1 if v in files else 0
-
-    def _find_root(self):
-        """Find root of the dataset repository.
-        """
-        lfns = [self.graph.node[file_id]['lfn'] for file_id in self.files]
-        for lfn in lfns:
-            if '_mapper' in lfn:
-                break
-        return os.path.dirname(lfn)
+            self.graph.node[v]['node_type'] = 0 if v in files else 1
 
 
 def read_json(filename):
@@ -254,3 +253,23 @@ def read_json(filename):
     with open(filename, 'r') as f:
         data = json.load(f)
     return json_graph.node_link_graph(data, directed=True)
+
+
+def read_pickle(filename):
+    """Read a workflow specified as a Python pickle file.
+
+    Parameters
+    ----------
+    filename : `str`
+        File with the persisted workflow.
+
+    Returns
+    -------
+    `networkx.DiGraph`
+        Graph representing the workflow.
+    """
+    import pickle
+
+    with open(filename, 'rb') as f:
+        data = pickle.load(f)
+    return data

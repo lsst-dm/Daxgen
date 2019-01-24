@@ -2,7 +2,7 @@ import unittest
 import networkx as nx
 import os
 import tempfile
-from ..daxgen import Daxgen
+from daxgen.daxgen import Daxgen
 
 
 class TestDaxgen(unittest.TestCase):
@@ -89,14 +89,13 @@ http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd">
         attrs = tuple(g.node[u]['bipartite'] for u in ['0', '1', '2'])
         self.assertEqual(attrs, (1, 0, 1))
 
-    @unittest.skip('requires development version of NetworkX (>1.11)')
     def test_read_json(self):
         gen = Daxgen()
         gen.read(self.json_path)
         g, h = gen.graph, self.valid.graph
         self.assertEqual(sorted(g.nodes()), sorted(h.nodes()))
         self.assertEqual(sorted(g.edges()), sorted(h.edges()))
-        self.assertDictContainsSubset(h.graph, g.graph)
+        self.assserTrue(set(h.graph.items()) <= set(g.graph.items()))
         for u, v in zip(sorted(g.nodes()), sorted(h.nodes())):
             self.assertEqual(g.node[u], h.node[v])
 
@@ -106,7 +105,7 @@ http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd">
         g, h = gen.graph, self.valid.graph
         self.assertEqual(sorted(g.nodes()), sorted(h.nodes()))
         self.assertEqual(sorted(g.edges()), sorted(h.edges()))
-        self.assertDictContainsSubset(h.graph, g.graph)
+        self.assertTrue(set(h.graph.items()) <= set(g.graph.items()))
         for u, v in zip(sorted(g.nodes()), sorted(h.nodes())):
             self.assertEqual(g.node[u], h.node[v])
 
